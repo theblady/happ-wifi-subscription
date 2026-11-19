@@ -1,0 +1,56 @@
+name: Update Happ subscription
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */2 * * *'
+
+concurrency:
+  group: happ-pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Test subscription builder
+        run: python3 -m unittest -v
+      - name: Install pinned Mihomo release
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/mihomo.gz"
+          curl --fail --silent --show-error --location --retry 3 \
+            'https://github.com/MetaCubeX/mihomo/releases/download/v1.19.34/mihomo-linux-amd64-compatible-v1.19.34.gz' \
+            --output "$archive"
+          echo "2763f5b414527f7baf6dc57e3f82f3ab561eedf34bfd7c2f2cde1f7e592efe06  $archive" | sha256sum --check
+          gzip -dc "$archive" > "$RUNNER_TEMP/mihomo"
+          chmod +x "$RUNNER_TEMP/mihomo"
+      - name: Probe public endpoints and generate Happ subscription
+        run: python3 -u build.py --mihomo "$RUNNER_TEMP/mihomo"
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.publish.outputs.page_url }}
+    steps:
+      - name: Publish subscription
+        id: publish
+        uses: actions/deploy-pages@v4
