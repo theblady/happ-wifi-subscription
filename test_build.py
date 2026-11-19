@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from urllib.parse import unquote
 
-from build import Candidate, Result, candidates, choose, parse_trace, provider_files, publish, wifi_pool
+from build import Candidate, Result, candidates, choose, parse_trace, provider_files, publish, wifi_pool, wifi_results
 
 
 def b64(text):
@@ -21,6 +21,12 @@ class SubscriptionTests(unittest.TestCase):
         current = candidates([first, unmeasured])
         result = wifi_pool(current, previous, delays)
         self.assertEqual([item.uri for item in result], [previous, first])
+
+    def test_wifi_results_keep_home_measurements_including_country(self):
+        candidates_from_home = [Candidate('nl', 'vless://nl'), Candidate('jp', 'vless://jp')]
+        baseline = {'delays_ms': {'nl': 950, 'jp': 520}, 'countries': {'nl': 'NL', 'jp': 'JP'}}
+        results = choose(wifi_results(candidates_from_home, baseline), 1)
+        self.assertEqual([(row.node.name, row.country, row.delay) for row in results], [('jp', 'JP', 520)])
 
     def test_deduplicates_labels_and_parameter_order_across_formats(self):
         first = 'vless://example@example.com:443?type=tcp&security=tls#first'

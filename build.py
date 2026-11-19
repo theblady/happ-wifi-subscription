@@ -146,6 +146,13 @@ def wifi_pool(current, previous_feed, delays):
     return sorted(combined.values(), key=lambda node: (delays[node.name], node.name))
 
 
+def wifi_results(nodes, baseline):
+    return [
+        Result(node, baseline['delays_ms'][node.name], '', baseline['countries'][node.name])
+        for node in nodes
+    ]
+
+
 def rename(uri, label):
     base = uri.split('#', 1)[0]
     if base.startswith('vmess://') and '@' not in urlsplit(base).netloc:
@@ -217,8 +224,7 @@ def provider_files(home, nodes):
     return providers
 
 
-def check_with_mihomo(nodes, hosts, binary, workers, curl, *, wifi_delays=None,
-                      interface=None, target_count=None):
+def check_with_mihomo(nodes, hosts, binary, workers, curl, *, interface=None, target_count=None):
     target_count = target_count or SUBSCRIPTION_SIZE
     direct = parse_trace(request(TRACE_URL))
     if direct is None:
@@ -284,9 +290,7 @@ def check_with_mihomo(nodes, hosts, binary, workers, curl, *, wifi_delays=None,
                     path = f'/providers/proxies/{node.name}/{node.name}/healthcheck?{query}'
                     try:
                         ms = json.loads(api(path, timeout=7))['delay']
-                        if isinstance(ms, int) and ms > 0:
-                            return (wifi_delays[node.name] if wifi_delays is not None else ms, node)
-                        return None
+                        return (ms, node) if isinstance(ms, int) and ms > 0 else None
                     except (OSError, ValueError, KeyError):
                         return None
 
@@ -391,11 +395,11 @@ def main():
         raise SystemExit('No usable source records')
     results, checked, passed = check_with_mihomo(
         nodes, hosts, args.mihomo, args.workers, args.curl,
-        wifi_delays=baseline['delays_ms'] if baseline else None, interface=args.interface,
+        interface=args.interface,
         target_count=70 if args.record_wifi_baseline else SUBSCRIPTION_SIZE,
     )
-    selected = choose(results, SUBSCRIPTION_SIZE)
-    print(f'{len(results)} with verified egress; publishing {len(selected)}', flush=True)
+    selected = choose(wifi_results(nodes, baseline) if baseline else results, SUBSCRIPTION_SIZE)
+    print(f'{len(results)} with egress in this run; publishing {len(selected)}', flush=True)
     summary = {'sources': counts, 'checked': checked, 'https_ok': passed}
     if baseline:
         summary['wifi_measured_at'] = baseline['measured_at']
@@ -404,6 +408,7 @@ def main():
         measurements = {
             'measured_at': datetime.now(timezone.utc).isoformat(),
             'delays_ms': {row.node.name: row.delay for row in results},
+            'countries': {row.node.name: row.country for row in results},
         }
         args.record_wifi_baseline.write_text(json.dumps(measurements, indent=2) + '\n', encoding='utf-8')
 

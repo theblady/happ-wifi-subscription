@@ -3,5 +3,9 @@
   "delays_ms": {
     "ac4e4efe1dcc7d10": 3411,
     "75d7bff7354907f0": 4120
+  },
+  "countries": {
+    "ac4e4efe1dcc7d10": "JP",
+    "75d7bff7354907f0": "NL"
   }
 }
