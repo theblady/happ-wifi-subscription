@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from urllib.parse import unquote
 
-from build import Candidate, Result, candidates, choose, parse_trace, provider_files, publish
+from build import Candidate, Result, candidates, choose, parse_trace, provider_files, publish, wifi_pool
 
 
 def b64(text):
@@ -12,12 +12,27 @@ def b64(text):
 
 
 class SubscriptionTests(unittest.TestCase):
+    def test_wifi_pool_keeps_only_measured_nodes_and_can_recheck_last_publication(self):
+        first = 'trojan://first@example.com:443'
+        previous = 'trojan://previous@example.net:443'
+        unmeasured = 'trojan://unknown@example.org:443'
+        measured = candidates([first, previous])
+        delays = {measured[0].name: 105, measured[1].name: 50}
+        current = candidates([first, unmeasured])
+        result = wifi_pool(current, previous, delays)
+        self.assertEqual([item.uri for item in result], [previous, first])
+
     def test_deduplicates_labels_and_parameter_order_across_formats(self):
         first = 'vless://example@example.com:443?type=tcp&security=tls#first'
         duplicate = 'vless://example@example.com:443?security=tls&type=tcp#other'
         nodes = candidates([first, b64(duplicate)])
         self.assertEqual(len(nodes), 1)
         self.assertEqual(nodes[0].uri, first)
+
+    def test_preserves_duplicate_option_order_in_proxy_identity(self):
+        base = 'vless://example@example.com:443?'
+        nodes = candidates([base + 'type=ws&type=grpc', base + 'type=grpc&type=ws'])
+        self.assertEqual(len(nodes), 2)
 
     def test_rejects_local_destinations_and_unrecognized_input(self):
         vmess = b64('{"ps":"local","add":"::1","port":"443"}')

@@ -27,6 +27,7 @@ SOURCES = {
     'morpheusadam': RAW + 'morpheusadam/v2ray-config/main/subs/bundles/best.txt',
     'barry-far': RAW + 'barry-far/V2ray-Config/main/Sub1.txt',
 }
+PUBLISHED_FEED = 'https://theblady.github.io/happ-wifi-subscription/happ.txt'
 SCHEMES = {'vless', 'vmess', 'trojan', 'ss', 'hy2', 'hysteria2'}
 TEST_URL = 'https://www.gstatic.com/generate_204'
 TRACE_URL = 'https://www.cloudflare.com/cdn-cgi/trace'
@@ -114,7 +115,8 @@ def uri_key(uri):
         return 'vmess://' + json.dumps(profile, sort_keys=True)
     if url.scheme == 'hy2':
         url = url._replace(scheme='hysteria2')
-    query = urlencode(sorted(parse_qsl(url.query, keep_blank_values=True)))
+    options = parse_qsl(url.query, keep_blank_values=True)
+    query = urlencode(sorted(options, key=lambda pair: pair[0]))
     return url._replace(query=query, fragment='').geturl()
 
 
@@ -136,6 +138,12 @@ def candidates(feeds):
             name = hashlib.sha256(key.encode()).hexdigest()[:16]
             unique.setdefault(name, Candidate(name, uri))
     return list(unique.values())
+
+
+def wifi_pool(current, previous_feed, delays):
+    combined = {node.name: node for node in candidates([previous_feed]) if node.name in delays}
+    combined.update((node.name, node) for node in current if node.name in delays)
+    return sorted(combined.values(), key=lambda node: (delays[node.name], node.name))
 
 
 def rename(uri, label):
@@ -209,7 +217,9 @@ def provider_files(home, nodes):
     return providers
 
 
-def check_with_mihomo(nodes, hosts, binary, workers, curl):
+def check_with_mihomo(nodes, hosts, binary, workers, curl, *, wifi_delays=None,
+                      interface=None, target_count=None):
+    target_count = target_count or SUBSCRIPTION_SIZE
     direct = parse_trace(request(TRACE_URL))
     if direct is None:
         raise RuntimeError('No direct connection to the geo check endpoint')
@@ -237,6 +247,8 @@ def check_with_mihomo(nodes, hosts, binary, workers, curl):
             ],
             'rules': ['MATCH,REJECT'],
         }
+        if interface:
+            config['interface-name'] = interface
         config_path = home / 'config.yaml'
         config_path.write_text(json.dumps(config), encoding='utf-8')
 
@@ -272,7 +284,9 @@ def check_with_mihomo(nodes, hosts, binary, workers, curl):
                     path = f'/providers/proxies/{node.name}/{node.name}/healthcheck?{query}'
                     try:
                         ms = json.loads(api(path, timeout=7))['delay']
-                        return (ms, node) if isinstance(ms, int) and ms > 0 else None
+                        if isinstance(ms, int) and ms > 0:
+                            return (wifi_delays[node.name] if wifi_delays is not None else ms, node)
+                        return None
                     except (OSError, ValueError, KeyError):
                         return None
 
@@ -298,7 +312,7 @@ def check_with_mihomo(nodes, hosts, binary, workers, curl):
                     for start in range(0, min(len(passed), MAX_GEO_CHECKS), GEO_WORKERS):
                         batch = passed[start:start + GEO_WORKERS]
                         results.extend(filter(None, pool.map(locate, enumerate(batch))))
-                        if len(results) >= SUBSCRIPTION_SIZE:
+                        if len(results) >= target_count:
                             break
                 return results, len(available), len(passed)
             finally:
@@ -336,7 +350,12 @@ def main():
     parser.add_argument('--curl', default='curl')
     parser.add_argument('--output', type=Path, default=Path('site'))
     parser.add_argument('--workers', type=int, default=48)
+    parser.add_argument('--wifi-baseline', type=Path)
+    parser.add_argument('--interface')
+    parser.add_argument('--record-wifi-baseline', type=Path)
     args = parser.parse_args()
+    if args.record_wifi_baseline and (not args.interface or args.wifi_baseline):
+        parser.error('Recording a baseline requires --interface and a fresh scan')
 
     def load_source(item):
         name, url = item
@@ -355,13 +374,38 @@ def main():
         feeds = list(pool.map(load_source, SOURCES.items()))
     counts = {name: count for name, _, count in feeds}
     print('Source counts:', counts, flush=True)
-    nodes, hosts = public_dns(candidates(body for _, body, _ in feeds))
+    nodes = candidates(body for _, body, _ in feeds)
+    baseline = None
+    if args.wifi_baseline:
+        baseline = json.loads(args.wifi_baseline.read_text(encoding='utf-8'))
+        previous = ''
+        if not all(counts.values()):
+            try:
+                previous = request(PUBLISHED_FEED)
+            except (OSError, ValueError):
+                pass
+        nodes = wifi_pool(nodes, previous, baseline['delays_ms'])
+        print(f'{len(nodes)} candidates have a Wi-Fi measurement', flush=True)
+    nodes, hosts = public_dns(nodes)
     if not nodes:
         raise SystemExit('No usable source records')
-    results, checked, passed = check_with_mihomo(nodes, hosts, args.mihomo, args.workers, args.curl)
+    results, checked, passed = check_with_mihomo(
+        nodes, hosts, args.mihomo, args.workers, args.curl,
+        wifi_delays=baseline['delays_ms'] if baseline else None, interface=args.interface,
+        target_count=70 if args.record_wifi_baseline else SUBSCRIPTION_SIZE,
+    )
     selected = choose(results, SUBSCRIPTION_SIZE)
     print(f'{len(results)} with verified egress; publishing {len(selected)}', flush=True)
-    publish(args.output, selected, {'sources': counts, 'checked': checked, 'https_ok': passed})
+    summary = {'sources': counts, 'checked': checked, 'https_ok': passed}
+    if baseline:
+        summary['wifi_measured_at'] = baseline['measured_at']
+    publish(args.output, selected, summary)
+    if args.record_wifi_baseline:
+        measurements = {
+            'measured_at': datetime.now(timezone.utc).isoformat(),
+            'delays_ms': {row.node.name: row.delay for row in results},
+        }
+        args.record_wifi_baseline.write_text(json.dumps(measurements, indent=2) + '\n', encoding='utf-8')
 
 
 if __name__ == '__main__':
