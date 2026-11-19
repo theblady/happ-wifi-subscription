@@ -36,7 +36,7 @@ jobs:
       - name: Probe public endpoints and generate Happ subscription
         run: python3 -u build.py --mihomo "$RUNNER_TEMP/mihomo"
       - name: Upload GitHub Pages artifact
-        uses: actions/upload-pages-artifact@v4
+        uses: actions/upload-pages-artifact@v5
         with:
           path: site
 
