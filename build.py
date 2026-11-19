@@ -32,7 +32,8 @@ SCHEMES = {'vless', 'vmess', 'trojan', 'ss', 'hy2', 'hysteria2'}
 TEST_URL = 'https://www.gstatic.com/generate_204'
 TRACE_URL = 'https://www.cloudflare.com/cdn-cgi/trace'
 MAX_FEED = 5 * 1024 * 1024
-TIMEOUT_MS = 4500
+TIMEOUT_MS = 10_000
+GEO_TIMEOUT = 12
 GEO_WORKERS = 8
 MAX_GEO_CHECKS = 160
 SUBSCRIPTION_SIZE = 20
@@ -289,23 +290,24 @@ def check_with_mihomo(nodes, hosts, binary, workers, curl, *, interface=None, ta
                 def delay(node):
                     path = f'/providers/proxies/{node.name}/{node.name}/healthcheck?{query}'
                     try:
-                        ms = json.loads(api(path, timeout=7))['delay']
+                        ms = json.loads(api(path, timeout=TIMEOUT_MS / 1000 + 2))['delay']
                         return (ms, node) if isinstance(ms, int) and ms > 0 else None
                     except (OSError, ValueError, KeyError):
                         return None
 
                 with concurrent.futures.ThreadPoolExecutor(workers) as pool:
                     passed = sorted(filter(None, pool.map(delay, available)), key=lambda pair: pair[0])
-                print(f'{len(passed)} returned HTTPS 204 through the proxy', flush=True)
+                print(f'{len(passed)} returned an HTTPS response through the proxy', flush=True)
 
                 def locate(item):
                     slot, (ms, node) = item
                     try:
                         api(f'/proxies/{groups[slot]}', data={'name': node.name})
                         response = subprocess.run([
-                            curl, '--silent', '--fail', '--max-time', '7', '--max-filesize', '4096',
+                            curl, '--silent', '--fail', '--max-time', str(GEO_TIMEOUT), '--max-filesize', '4096',
                             '--noproxy', '', '--proxy', f'http://127.0.0.1:{listeners[slot]}', TRACE_URL,
-                        ], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=9)
+                        ], capture_output=True, text=True, encoding='utf-8', errors='replace',
+                            timeout=GEO_TIMEOUT + 2)
                         trace = parse_trace(response.stdout, direct[0]) if response.returncode == 0 else None
                         return Result(node, ms, *trace) if trace else None
                     except (OSError, subprocess.TimeoutExpired):
